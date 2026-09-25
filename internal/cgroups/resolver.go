@@ -1,10 +1,37 @@
-// Package cgroups, cekirdekten gelen cgroup v2 kimliklerini yola ve oradan
-// Kubernetes pod/container kimligine cevirir.
+// Package cgroups — cekirdegin verdigi sayiyi Kubernetes kimligine cevirir.
 //
-// Yontem: cgroupfs'te bir dizinin dosya tanitici (file handle) degeri, BPF
-// tarafindaki bpf_get_current_cgroup_id() ile ayni 64-bit kimligi tasir.
-// Agaci bir kez tarayip haritayi kuruyoruz; eslesmeyen kimlikte (yeni pod)
-// sinirli sikliğa bagli olarak yeniden tariyoruz.
+// # NE ISE YARIYOR
+//
+// eBPF bize cgroup_id veriyor: 64 bitlik bir sayi, pod adi degil. Bu paket
+// o sayiyi once bir cgroupfs yoluna, oradan da pod UID + container ID'ye
+// ceviriyor. Onsuz akislar "bir yerden bir yere" olurdu; bununla "su pod'dan
+// su adrese" oluyor.
+//
+// # NASIL CALISIYOR
+//
+// Kubernetes API'sine HIC BASVURMUYOR. Yontem su gozleme dayaniyor:
+// cgroupfs'te bir dizinin dosya tanitici (file handle) degeri, BPF
+// tarafindaki bpf_get_current_cgroup_id() ile AYNI 64-bit kimligi tasiyor.
+// Yani /sys/fs/cgroup agacini gezip her dizinin kimligini okuyarak
+// kimlik -> yol haritasi kurulabiliyor. Yolun icinde pod UID ve container ID
+// zaten yaziyor.
+//
+// API'ye basvurmamak bilincli: probe her dugumde root olarak calisacak ve
+// her olay icin apiserver'a sorgu atmak hem gecikme hem yuk anlaminda
+// kabul edilemez. Ustelik kubelet cokse bile bu yontem calismaya devam eder.
+//
+// # NEDEN YENIDEN TARAMA VAR
+//
+// Pod'lar surekli yaratilip siliniyor; bir kez taranan harita hemen
+// bayatliyor. Bulunamayan her kimlikte agaci bastan taramak ise pahali
+// (binlerce dizin). minRescan bu ikisi arasinda denge kuruyor: bilinmeyen
+// bir kimlik gelirse yeniden tara, ama saniyede bir defadan fazla degil.
+//
+// # SINIRI
+//
+// Yol bir Kubernetes is yukune ait olmayabilir -- sistem servisleri,
+// kullanici oturumlari. Parse() o durumda bos alanlar dondurur; olay yine
+// yayinlanir, yalnizca pod eslestirmesi yapilamaz.
 package cgroups
 
 import (
@@ -21,7 +48,9 @@ import (
 // DefaultRoot, cgroup v2 birlesik hiyerarsisinin olagan yeri.
 const DefaultRoot = "/sys/fs/cgroup"
 
-// minRescan, bulunamayan her kimlik icin butun agaci yeniden taramayi engeller.
+// minRescan — bulunamayan her kimlik icin butun agaci yeniden taramayi
+// engelleyen alt sinir. Bilinmeyen kimlik akini (yeni pod dalgasi) geldiginde
+// tarama maliyeti saniyede bir defayla sinirli kaliyor.
 const minRescan = 2 * time.Second
 
 // Resolver, cgroup id -> yol haritasini tutar.
@@ -91,7 +120,12 @@ func (r *Resolver) scan() {
 	}
 }
 
-// cgroupID, bir cgroup dizininin cekirdek ic kimligini okur.
+// cgroupID — bir cgroup dizininin cekirdek ic kimligini okur.
+//
+// name_to_handle_at(2) cgroupfs uzerinde dizinin inode benzeri 64-bit
+// kimligini dondurur ve bu deger BPF tarafindaki
+// bpf_get_current_cgroup_id() ile ayni. Butun eslestirme bu esitlige
+// dayaniyor.
 func cgroupID(path string) (uint64, error) {
 	handle, _, err := unix.NameToHandleAt(unix.AT_FDCWD, path, 0)
 	if err != nil {

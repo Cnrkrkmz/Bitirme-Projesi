@@ -35,6 +35,10 @@ declare -A SCENARIO=(
 	[port]="32-break-port.yaml|frontend -> api:18081|allow-api-admin"
 	[and-or]="33-break-and-or.yaml|frontend -> api:18080|allow-api-app"
 )
+# Is yuklerinin sabitlenecegi dugum. flowmon dugum basina calistigi icin
+# pod'lar bu scriptin kostugu makineye gelmeli; baska bir dugum isterseniz
+# NODE=... ile gecin.
+NODE=${NODE:-$(hostname)}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 MAN="$ROOT/manifests"
 OUT="$ROOT/out"
@@ -43,9 +47,10 @@ BIN=${BIN:-$ROOT/bin/flowmon}
 die() { echo "HATA: $*" >&2; exit 1; }
 
 cmd_up() {
-	echo "==> is yukleri"
+	echo "==> is yukleri (dugum: $NODE)"
 	kubectl apply -f "$MAN/00-namespace.yaml"
-	kubectl apply -f "$MAN/10-workloads.yaml"
+	# nodeName manifeste sabit yazili; bu makinenin adiyla degistiriyoruz.
+	sed "s/^\( *nodeName: \).*/\1$NODE/" "$MAN/10-workloads.yaml" | kubectl apply -f -
 	for p in store api frontend; do
 		kubectl wait -n "$NS" --for=condition=Ready "pod/$p" --timeout=180s \
 			|| { kubectl describe -n "$NS" "pod/$p" | tail -25; die "$p hazir olmadi"; }

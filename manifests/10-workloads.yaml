@@ -11,8 +11,13 @@
 # gorunmez kalirdi.
 #
 # Portlar sira disi secildi: dugumdeki diger is yukleriyle karismasin.
-# Uc pod da ayni dugume sabit, cunku flowmon dugum basina calisiyor ve
-# connect() ile probe ayni cekirdekte olmali.
+#
+# nodeName MAKINEYE OZGUDUR. Uc pod da flowmon'un calistigi dugume sabit
+# olmali, cunku probe dugum basina calisiyor ve connect() ile kanca ayni
+# cekirdekte gerceklesmek zorunda. Buradaki "master" yalnizca varsayilan;
+# scripts/env.sh uygularken $NODE degiskeniyle (varsayilan: `hostname`)
+# bu satirlari yeniden yaziyor. Manifesti dogrudan kubectl ile uygularsaniz
+# kendi dugum adinizla degistirin.
 apiVersion: v1
 kind: Service
 metadata:

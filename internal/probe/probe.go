@@ -1,8 +1,38 @@
-// Package probe, derlenmis eBPF nesnesini yukler ve kancalari takar.
+// Package probe — derlenmis eBPF programini cekirdege yukler, kancalari takar,
+// ring buffer'in ucunu userspace'e uzatir.
 //
-// .o dosyasi ikiliye gomulu (go:embed): calisma aninda dosya yolu bagimliligi
-// olmuyor, boylece Operator tarafindan bir DaemonSet icinde tek binary olarak
-// dagitilabiliyor.
+// # NE ISE YARIYOR
+//
+// Bu paket KURULUMCU. Veri tutmaz, olay yorumlamaz, karar vermez. Uc isi var:
+//
+//	Load()     .o'yu cekirdege iter, uc kancayi takar, ring buffer'i acar
+//	Dropped()  ring buffer tastigi icin kaybedilen olay sayisini okur
+//	Close()    kancalari soker, programlari birakir
+//
+// Sikca karistirilir: yakalanan trafigi burasi KAYDETMIYOR. Kayit ve yorum
+// internal/flow icinde.
+//
+// NEDEN .o IKILIYE GOMULU (go:embed)
+//
+// Calisma aninda dosya yolu bagimliligi olmasin diye. Program tek bir
+// dosyadan ibaret: "flowmon.bpf.o nerede" sorusu hic sorulmuyor. Faz 2'de
+// Operator bunu bir DaemonSet icinde dagitacak ve o baglamda yanina ikinci
+// bir dosya koymak ekstra bir hata kaynagi olurdu.
+//
+// Bunun bedeli: bpf/*.c degistiginde `make bpf` yeniden calismali, yoksa
+// ikili eski programi gomulu tasimaya devam eder. Makefile bu sirayi zaten
+// kuruyor.
+//
+// KANCALARIN TAKILMA BICIMI FARKLI
+//
+//	fm_tcp_v4_connect       link.Kprobe       -- isimle cekirdek fonksiyonuna
+//	fm_tcp_retransmit_skb   link.AttachTracing -- BTF ile ham tracepoint'e
+//	fm_inet_sock_set_state  link.AttachTracing
+//
+// Ikinci grup tp_btf; hedefi program ELF'inin SEC() etiketinden okunuyor,
+// bu yuzden ayrica isim verilmiyor. tp_btf tercih edilmesinin sebebi
+// bpf/flowmon.bpf.c basinda anlatiliyor (struct adlari cekirdek surumleri
+// arasinda degisiyor, ham tracepoint imzalari degismiyor).
 package probe
 
 import (
@@ -27,8 +57,14 @@ type Probe struct {
 	Events *ringbuf.Reader
 }
 
-// Load, eBPF nesnesini yukler ve uc kancayi takar. Hata durumunda kismi
-// kaynaklar temizlenir.
+// Load — gomulu eBPF nesnesini yukler ve uc kancayi takar.
+//
+// Root yetkisi gerekiyor (BPF program yukleme). Cekirdekte BTF olmali
+// (/sys/kernel/btf/vmlinux); CO-RE ve tp_btf bunun uzerine kurulu.
+//
+// Herhangi bir adim basarisiz olursa o ana kadar alinan kaynaklar Close()
+// ile birakiliyor -- yarim yuklenmis program ve asili kalan kanca birakmak
+// cekirdekte sizinti demek.
 func Load() (*Probe, error) {
 	// Eski cekirdeklerde BPF map'leri memlock kotasindan dusuyor; kaldiriyoruz.
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -98,9 +134,12 @@ func Load() (*Probe, error) {
 	return p, nil
 }
 
-// Dropped, ring buffer dolu oldugu icin atilan olay sayisini dondurur.
-// Sifirdan buyuk bir deger olcumun eksik oldugu anlamina gelir; sessizce
-// gecilmemeli.
+// Dropped — ring buffer dolu oldugu icin cekirdegin atmak zorunda kaldigi
+// olay sayisi.
+//
+// Sifirdan buyuk bir deger "olcum eksik" demektir ve bu sessizce gecilemez:
+// eksik bir gozlenen akis kumesiyle hesaplanan PMR yanlis cikar, ustelik
+// yanlis oldugu belli olmaz. cmd/flowmon kapanista bunu uyari olarak basiyor.
 func (p *Probe) Dropped() (uint64, error) {
 	m := p.coll.Maps["dropped"]
 	if m == nil {

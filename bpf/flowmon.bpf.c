@@ -1,11 +1,42 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * flowmon.bpf.c — Faz 0/1 telemetri cekirdegi.
+ * flowmon.bpf.c — projenin SENSORU. Cekirdegin icinde calisir.
  *
- * Amac (Proje Ozeti §3.3, §15): basarisiz bir connect() denemesinden
- * (kaynak, hedef, port) ucluosunu cikarmak. Bu uclu dogrulama kapisini
- * sinirlayan "gozlenen akis" kumesini olusturur — PMR'nin paydasi degil,
- * kapinin ust sinirini belirleyen kume.
+ * NE ISE YARIYOR
+ *
+ * Dugumdeki her giden IPv4 TCP baglanti denemesini yakalar ve sonucunu
+ * userspace'e bildirir. Amac (Proje Ozeti §3.3, §15) basarisiz bir
+ * connect() denemesinden (kaynak, hedef, port) uclusunu cikarmak; bu uclu
+ * dogrulama kapisini sinirlayan "gozlenen akis" kumesini olusturur.
+ *
+ * NEREDE DURUYOR
+ *
+ * Kancalar TCP SOKET katmaninda. Calico'nun NetworkPolicy programlari
+ * asagida, TC katmaninda:
+ *
+ *     uygulama  --connect()-->  TCP soket katmani   <-- BIZ BURADAYIZ
+ *                                      |
+ *                                      v
+ *                               TC hook (Calico)    <-- politika BURADA
+ *                                      X               uygulaniyor
+ *
+ * Yani SYN'in gonderildigini goruyoruz, dusuruldugunu GORMUYORUZ. Gordugumuz
+ * tek sey cevabin hic gelmemesi. Sensorun NetworkPolicy'ye ozel olmamasinin
+ * sebebi de bu: iptables, ag bolunmesi, dugum olumu -- el sikismayi engelleyen
+ * her sey ayni imzayi uretiyor.
+ *
+ * CALISMA BAGLAMI UYARISI
+ *
+ * Uc kanca AYNI baglamda calismiyor ve bu tasarimi belirliyor:
+ *
+ *   kprobe/tcp_v4_connect   GOREV baglami -- cagiran surecin icinde.
+ *                           bpf_get_current_cgroup_id(), pid ve comm
+ *                           YALNIZCA burada anlamli.
+ *
+ *   tp_btf kancalari        SOFTIRQ baglami -- "hangi surec" sorusunun
+ *                           cevabi yok. Bu yuzden gorev bilgisi once
+ *                           conn_meta_map'e yaziliyor, sonra oradan
+ *                           okunuyor.
  *
  * Neden bu uc kanca:
  *
@@ -50,8 +81,11 @@ char LICENSE[] SEC("license") = "GPL";
 #define FM_TCP_CLOSE       7
 #define FM_AF_INET         2
 
-/* Gorev baglamindan toplanan, tracepoint'te kayip olan bilgi. sock isaretcisi
- * ile anahtarlanir; soket kapandiginda silinir. */
+/* Gorev baglaminda toplanip tracepoint'e tasinan bilgi.
+ *
+ * struct sock * isaretcisi ile anahtarlaniyor: connect() sirasinda yazilan
+ * kayit, ayni soket icin tetiklenen tracepoint'te bulunuyor. Soket
+ * CLOSE'a dustugunde siliniyor. */
 struct conn_meta {
 	__u64 ts_ns;
 	__u64 cgroup_id;
@@ -77,8 +111,11 @@ struct {
 	__uint(max_entries, 1 << 20); /* 1 MiB */
 } events SEC(".maps");
 
-/* Dusurulen olaylar. Kayipli olcum sessizce yanlis PMR uretecegi icin
- * userspace bu sayaci her donemde raporlar. */
+/* Ring buffer dolu oldugu icin ATILAN olay sayisi.
+ *
+ * Neden ayri bir sayac: kayipli bir olcum sessizce yanlis PMR uretir ve
+ * yanlis oldugu belli olmaz. Bu sayac sifirdan buyukse gozlenen akis kumesi
+ * eksik demektir; userspace bunu kapanista uyari olarak basiyor. */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(max_entries, 1);
@@ -95,10 +132,15 @@ static __always_inline void count_drop(void)
 }
 
 /*
- * connect() giris noktasi. Burada hedef adresi OKUMUYORUZ: uaddr'den okumak
- * mumkun olsa da soket henuz baglanmadigi icin gereksiz; adresleri
- * inet_sock_set_state'te sock'tan kesin degerleriyle aliyoruz. Buradaki tek
- * is, tracepoint'in erisemeyecegi gorev baglamini kaydetmek.
+ * KANCA 1/3 — connect() giris noktasi.
+ *
+ * Tek isi, tracepoint'lerin erisemeyecegi gorev baglamini kaydetmek:
+ * cgroup_id (pod eslestirmesi icin), pid/tgid ve comm. Bu degerler softirq
+ * baglaminda okunamaz, bu yuzden burada yakalanip haritaya konuyor.
+ *
+ * Hedef adresi burada OKUMUYORUZ. uaddr'den okumak mumkun ama gereksiz:
+ * soket henuz baglanmadi ve adresleri asagida inet_sock_set_state'te
+ * sock'tan kesin degerleriyle aliyoruz.
  */
 SEC("kprobe/tcp_v4_connect")
 int BPF_KPROBE(fm_tcp_v4_connect, struct sock *sk)
@@ -118,9 +160,15 @@ int BPF_KPROBE(fm_tcp_v4_connect, struct sock *sk)
 }
 
 /*
- * SYN yeniden iletimi. Yalnizca SYN_SENT durumundakiler ilgilendiriyor:
- * kurulmus bir baglantidaki retransmit siradan paket kaybidir, SYN_SENT'teki
- * ise "SYN'e hic cevap gelmedi" demektir — sessiz dusurmenin imzasi.
+ * KANCA 2/3 — SYN yeniden iletimi. Projenin AYIRT EDICI sinyali.
+ *
+ * Yalnizca SYN_SENT durumundakiler sayiliyor. Ayrim kritik: kurulmus bir
+ * baglantidaki retransmit siradan paket kaybidir ve hicbir sey ifade etmez;
+ * SYN_SENT'teki ise "SYN gonderildi, hic cevap gelmedi" demektir.
+ *
+ * Bu sayac sayesinde userspace sessiz dusurmeyi (dropped) RST ile
+ * reddedilmeden (refused) ayirabiliyor. Sayac olmasaydi iki durum
+ * birbirinden ayirt edilemezdi -- ve kubectl'in yapamadigi sey tam olarak bu.
  */
 SEC("tp_btf/tcp_retransmit_skb")
 int BPF_PROG(fm_tcp_retransmit_skb, const struct sock *sk)
@@ -140,9 +188,19 @@ int BPF_PROG(fm_tcp_retransmit_skb, const struct sock *sk)
 }
 
 /*
- * Denemenin sonucu. SYN_SENT'ten cikis iki yone olur ve ikisi de raporlanir:
- * basarili baglantilar da gerekli — gozlenen akis kumesi (§3.3) calisan
- * trafigi de icermek zorunda, yoksa kapi mesru akislari kapatir (UPR).
+ * KANCA 3/3 — denemenin sonucu ve olayin yayinlandigi yer.
+ *
+ * SYN_SENT'ten cikis iki yone olur:
+ *   -> ESTABLISHED   el sikisma tamamlandi
+ *   -> CLOSE         tamamlanmadi (sessiz dusurme ya da RST)
+ *
+ * IKISI DE raporlaniyor. Basarili baglantilari atlamak cazip gorunur ama
+ * kapiyi bozar: gozlenen akis kumesi (§3.3) calisan trafigi de icermek
+ * zorunda, yoksa kapi mesru akislari kapatan bir oneriyi gecirir -- projenin
+ * UPR dedigi hata.
+ *
+ * Adresler burada sock'tan okunuyor cunku baglanti denemesi tamamlandigi
+ * icin kesin degerleri artik belli.
  */
 SEC("tp_btf/inet_sock_set_state")
 int BPF_PROG(fm_inet_sock_set_state, const struct sock *sk, int oldstate, int newstate)

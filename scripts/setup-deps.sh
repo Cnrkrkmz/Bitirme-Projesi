@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# Faz 0 icin gereken arac zincirini kurar (Ubuntu/Debian).
+# Sifirdan bir Ubuntu/Debian makinesini bu depoyu calistirabilir hale getirir.
+#
+# Kurdugu sey uc grup:
+#   1) eBPF arac zinciri   clang, libbpf, bpftool -- bpf/*.c'yi derlemek icin
+#   2) Go                  ikiliyi derlemek icin (go.mod 1.22+ istiyor)
+#   3) yardimci araclar    python3, jq -- scriptler bunlari kullaniyor
+#   4) netpol-analyzer     statik politika analizi (scripts/analyze.sh)
+#
+# KURMADIGI sey: Kubernetes kumesi ve CNI. Bu depo calisan bir kumeyi
+# varsayiyor (Calico eBPF veri duzleminde test edildi). kubectl'in calisan
+# bir kume gordugu asagida yalnizca DOGRULANIYOR, kurulmuyor.
 set -euo pipefail
 
 SUDO=""
@@ -9,7 +19,8 @@ echo "==> apt paketleri"
 $SUDO apt-get update -qq
 $SUDO apt-get install -y --no-install-recommends \
 	clang llvm libbpf-dev libelf-dev zlib1g-dev \
-	build-essential pkg-config golang-go
+	build-essential pkg-config golang-go \
+	python3 jq curl
 
 # bpftool cogu dagitimda linux-tools icinde; bulunmazsa zararsiz gec.
 if ! command -v bpftool >/dev/null && [[ ! -x /usr/sbin/bpftool ]]; then
@@ -38,6 +49,22 @@ if ! "$GO_BIN" version >/dev/null 2>&1 || \
 	echo "   PATH'e ekleyin:  export PATH=\$PATH:/usr/local/go/bin"
 fi
 
+# netpol-analyzer (np-guard): statik politika analizi. Hazir ikili
+# yayinlanmiyor, kaynaktan derlemek gerekiyor.
+NP=$(go env GOPATH 2>/dev/null || echo "$HOME/go")/bin/netpolicy
+if [[ ! -x $NP ]]; then
+	echo "==> netpol-analyzer"
+	# Linker bellek yiyor: 4 GB'in altindaki makinelerde OOM ile olebiliyor.
+	# Once sayfa onbellegini birakip daha siki GC ile deniyoruz.
+	avail=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
+	if [[ ${avail:-0} -lt 1200 ]]; then
+		echo "   (bellek dusuk: ${avail}MB -- onbellek birakiliyor)"
+		$SUDO sync && $SUDO sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+	fi
+	GOGC=20 go install github.com/np-guard/netpol-analyzer/cmd/netpolicy@v1.4.4 || \
+		echo "UYARI: netpolicy derlenemedi; scripts/analyze.sh calismaz."
+fi
+
 echo "==> dogrulama"
 for t in clang llvm-strip; do
 	printf '  %-12s ' "$t"
@@ -47,5 +74,20 @@ printf '  %-12s ' bpftool
 (command -v bpftool >/dev/null || [[ -x /usr/sbin/bpftool ]]) && echo OK || echo EKSIK
 printf '  %-12s ' go
 (command -v go >/dev/null || [[ -x /usr/local/go/bin/go ]]) && echo OK || echo EKSIK
+for t in python3 jq; do
+	printf '  %-12s ' "$t"
+	command -v "$t" >/dev/null && echo OK || echo EKSIK
+done
+printf '  %-12s ' netpolicy
+[[ -x $NP ]] && echo OK || echo "EKSIK - analyze.sh calismaz"
 printf '  %-12s ' BTF
 [[ -r /sys/kernel/btf/vmlinux ]] && echo OK || echo "EKSIK - CO-RE calismaz"
+
+# Asagidakiler kurulmuyor, yalnizca var olup olmadiklari bildiriliyor.
+printf '  %-12s ' kubectl
+command -v kubectl >/dev/null && echo OK || echo "EKSIK - manifests/ uygulanamaz"
+printf '  %-12s ' "kume erisimi"
+kubectl get nodes >/dev/null 2>&1 && echo OK || echo "ERISILEMIYOR - kubeconfig?"
+printf '  %-12s ' "CNI"
+kubectl get pods -A 2>/dev/null | grep -qi 'calico\|cilium' && echo OK || \
+	echo "UYARI - NetworkPolicy uygulayan bir CNI gerekiyor"

@@ -1,3 +1,35 @@
+// observed.go — tekil olaylardan "gozlenen akis kumesi"ni olusturur.
+//
+// # NE ISE YARIYOR
+//
+// event.go tek tek connect() denemelerini cozuyor; burasi onlari AKIS
+// bazinda topluyor. Bir akis (kaynak IP, hedef IP, hedef port) uclusuyle
+// tanimlanir ve kac kez kuruldugu / dustugu / reddedildigi sayilir.
+//
+// Uretilen JSON dosyasi (observed.json) projenin merkezi veri yapisi:
+// dogrulama kapisi (Proje Ozeti §3.3) onerilen bir NetworkPolicy yamasini
+// bu kumeye karsi sinar.
+//
+// # NEDEN BOYLE TASARLANDI
+//
+// Kaynak port disarida. Efemeral kaynak portu her denemede degisir; kumeye
+// dahil edilseydi ayni mantiksal akis her seferinde yeni bir kayit uretirdi
+// ve kume sisip anlamsizlasirdi. Ustelik NetworkPolicy semantiginde kaynak
+// portun karsiligi yok -- politikalar (kaynak, hedef, hedef port) uzerinden
+// yazilir. Key bu yuzden tam olarak politikanin konustugu dili konusuyor.
+//
+// Basarili akislar da toplaniyor. Yalnizca basarisizlari toplamak cazip
+// gorunur ama kapiyi bozar: kapi "bu oneri gozlenen akistan fazlasini
+// aciyor mu" diye sorar ve bu sorunun anlamli olmasi icin kumenin CALISAN
+// trafigi de icermesi gerekir. Aksi halde kapi mesru akislari kapatan bir
+// oneriyi gecirir -- projenin UPR (Under-Permission Rate) dedigi hata.
+//
+// Deterministik sira. Snapshot() ciktiyi sabit sirada dondurur. Senaryolar
+// (scenario, seed, proposal hash) uclusuyle eslestirildigi icin ayni girdi
+// ayni dosyayi uretmek zorunda; rastgele map sirasi bunu bozardi.
+//
+// Es zamanlilik. Add() ring buffer okuma dongusunden cagriliyor, Snapshot()
+// kapanista; mutex ikisinin cakismasina karsi.
 package flow
 
 import (

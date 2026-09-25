@@ -1,13 +1,50 @@
-// flowmon — Faz 0/1 eBPF telemetri toplayicisi.
+// Command flowmon — Kubernetes'te sessizce dusurulen TCP baglantilarini
+// cekirdekten tespit eder.
 //
-// Iki modu var:
+// # NE ISE YARIYOR
 //
-//	stream (varsayilan)  her connect() sonucunu JSONL olarak yazar
-//	-observed <dosya>    kapanista gozlenen akis kumesini JSON olarak dokur
+// Calistigi dugumdeki her giden IPv4 TCP baglanti denemesini yakalar, ucune
+// ayirir ve her denemeyi onu baslatan pod'a baglar:
 //
-// Faz 1'in referans vakasi icin tipik kullanim:
+//	established  el sikisma tamamlandi
+//	dropped      SYN'e hic cevap gelmedi     -> NetworkPolicy, firewall, partition
+//	refused      RST dondu, yeniden iletim yok -> o portta dinleyen surec yok
 //
-//	sudo ./bin/flowmon -dport 18080,16379 -observed observed.json
+// kubectl describe bu uc durumu da ayni gosterir. Projenin cozmeye calistigi
+// gozlem boslugu bu.
+//
+// # BU DOSYANIN ROLU
+//
+// Burasi KONTROL PANELI, is mantigi degil. Bayraklari okur, parcalari
+// birbirine baglar, okuma dongusunu cevirir. Asil is baska yerde:
+//
+//	internal/probe    eBPF programini cekirdege yukler, kancalari takar
+//	internal/flow     ham baytlari cozer, siniflandirir, akislari toplar
+//	internal/cgroups  cgroup id'yi pod kimligine cevirir
+//	bpf/              cekirdekte calisan asil sensor (C)
+//
+// # IKI CIKTI BICIMI
+//
+// stdout'a JSONL olay akisi gider: her satir bir connect() denemesi. Canli
+// izlemek ve hata ayiklamak icin.
+//
+// -observed ile kapanista GOZLENEN AKIS KUMESI yazilir: akis bazinda ozet.
+// Dogrulama kapisinin (Proje Ozeti §3.3) girdisi budur; kapi onerilen bir
+// NetworkPolicy yamasini bu kumeye karsi sinar.
+//
+// KULLANIM
+//
+//	sudo ./bin/flowmon -dport 18080,19090 -observed observed.json
+//
+// Root gerekiyor (BPF program yukleme) ve cekirdekte BTF olmali.
+// Ctrl-C ile duzgun kapanir ve gozlenen kumeyi yazar.
+//
+// # SINIRLAR
+//
+// Yalnizca giden IPv4 TCP. UDP yok, yani DNS hatalari GORUNMEZ. Gelen
+// baglantilar yok (sunucu tarafi accept() cagirir, connect() degil).
+// El sikismadan sonrasi yok: kurulmus bir baglanti sonradan koparsa ya da
+// uygulama HTTP 403 donerse bizim icin "established".
 package main
 
 import (
@@ -60,7 +97,11 @@ func main() {
 	}
 }
 
-// parsePorts, "-dport 18080,16379" bicimini cozer. Bos girdi "hepsi" demek.
+// parsePorts — "-dport 18080,19090" bicimini cozer. Bos girdi "hepsi" demek.
+//
+// Liste kabul etmesinin sebebi: gozlem ortaminda birden fazla akis var ve
+// hepsini tek kosuda olcmek gerekiyor. Tek port destegi yetseydi her akis
+// icin ayri kosu gerekirdi ve olcumler zaman icinde kayardi.
 func parsePorts(s string) (map[uint16]bool, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, nil
@@ -89,7 +130,12 @@ type runOpts struct {
 	quiet        bool
 }
 
-// jsonEvent, stdout'a yazilan satir bicimi.
+// jsonEvent — stdout'a yazilan JSONL satirinin bicimi.
+//
+// Ic Event tipinden ayri tutuluyor: bu yapi DIS SOZLESME (baska araclar
+// okuyacak), oteki ic temsil. omitempty olan alanlar meta bilgisi olmayan
+// olaylarda dusuyor -- probe takilmadan once yaratilmis soketlerde cgroup ve
+// pid anlamsiz, bos yazmak yaniltici olurdu.
 type jsonEvent struct {
 	Time       time.Time  `json:"time"`
 	Class      flow.Class `json:"class"`
@@ -222,9 +268,16 @@ func finish(p *probe.Probe, observed *flow.ObservedSet, path string, seen, writt
 	return nil
 }
 
-// bootWallClock, cekirdek monotonik saatinin sifir noktasina karsilik gelen
-// duvar saatini hesaplar. bpf_ktime_get_ns() CLOCK_MONOTONIC kullaniyor, yani
-// ayni kaynagi okuyup farki aliyoruz.
+// bootWallClock — cekirdek monotonik saatinin sifir noktasina karsilik gelen
+// duvar saati.
+//
+// Cekirdek olaylari bpf_ktime_get_ns() ile damgaliyor: acilistan beri gecen
+// nanosaniye. Bu sayi tek basina "saat 14:32'de oldu" bilgisi vermez.
+// Ayni saat kaynagini burada bir kez okuyup farki alarak cevrim katsayisini
+// buluyoruz; sonra her olaya ekleniyor.
+//
+// Neden duvar saati degil de monotonik kullaniliyor: duvar saati NTP ile
+// geri atlayabilir ve sureler negatif cikabilirdi.
 func bootWallClock() (time.Time, error) {
 	var ts unix.Timespec
 	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {

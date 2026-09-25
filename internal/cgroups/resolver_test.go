@@ -1,3 +1,21 @@
+// resolver_test.go — cgroup yolu ayristirmayi kilitler.
+//
+// # NEDEN BU TEST VAR
+//
+// Pod UID ve container ID, cgroup yolundan duzenli ifadeyle cikariliyor ve
+// yolun bicimi calisma ortamina gore DEGISIYOR:
+//
+//	systemd surucusu   .../kubepods-besteffort-pod<uuid>.slice/cri-...scope
+//	cgroupfs surucusu  .../kubepods/besteffort/pod<uuid>/<id>
+//
+// Ustelik iki farkli UID bicimi var: normal pod'lar cizgili UUID kullanir,
+// statik (mirror) pod'lar -- kube-apiserver, etcd, scheduler -- kubelet'in
+// urettigi cizgisiz 32 haneli bir hash. Ikincisi bir kez atlandi ve denetim
+// duzlemi pod'lari akislara baglanamadi; bu test o regresyonun tekrarini
+// engelliyor.
+//
+// Kubernetes'e ait OLMAYAN yollar (sistem servisleri, kullanici oturumlari)
+// da test ediliyor: bos alan donmeli, yanlis eslesme degil.
 package cgroups
 
 import "testing"

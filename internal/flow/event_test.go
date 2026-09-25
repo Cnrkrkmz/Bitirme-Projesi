@@ -1,3 +1,17 @@
+// event_test.go — C ile Go arasindaki bayt sozlesmesini kilitler.
+//
+// # NEDEN BU TEST VAR
+//
+// Cekirdek struct flow_event'i ham olarak ring buffer'a yaziyor, Parse()
+// ayni baytlari elle offsetlerden okuyor. Iki taraf kayarsa program hata
+// VERMEZ -- sessizce yanlis veri uretir: yanlis IP, yanlis port, yanlis
+// sinif. Boyle bir hata uretimde aylarca fark edilmeyebilir.
+//
+// Bu test o sessiz kaymayi gurultulu hale getiriyor. bpf/flowmon.h icindeki
+// bir alani degistirip event.go'yu guncellemezseniz test kirmizi yanar.
+//
+// Ayrica siniflandirma karar tablosunu da dogruluyor: hangi (verdict,
+// retrans, duration) uclusunun hangi sinifi urettigi burada sabitleniyor.
 package flow
 
 import (
@@ -13,16 +27,16 @@ import (
 func build(verdict uint8, retrans uint32, dur time.Duration, flags uint8) []byte {
 	b := make([]byte, EventSize)
 	e := binary.NativeEndian
-	e.PutUint64(b[0:8], 1_000)                // ts_ns
-	e.PutUint64(b[8:16], 4242)                // cgroup_id
-	e.PutUint64(b[16:24], uint64(dur))        // duration_ns
-	e.PutUint32(b[24:28], 111)                // pid
-	e.PutUint32(b[28:32], 222)                // tgid
-	copy(b[32:36], []byte{10, 0, 0, 5})       // saddr
-	copy(b[36:40], []byte{10, 0, 0, 9})       // daddr
-	e.PutUint32(b[40:44], retrans)            // retrans
-	e.PutUint16(b[44:46], 54321)              // sport
-	e.PutUint16(b[46:48], 7070)               // dport
+	e.PutUint64(b[0:8], 1_000)          // ts_ns
+	e.PutUint64(b[8:16], 4242)          // cgroup_id
+	e.PutUint64(b[16:24], uint64(dur))  // duration_ns
+	e.PutUint32(b[24:28], 111)          // pid
+	e.PutUint32(b[28:32], 222)          // tgid
+	copy(b[32:36], []byte{10, 0, 0, 5}) // saddr
+	copy(b[36:40], []byte{10, 0, 0, 9}) // daddr
+	e.PutUint32(b[40:44], retrans)      // retrans
+	e.PutUint16(b[44:46], 54321)        // sport
+	e.PutUint16(b[46:48], 7070)         // dport
 	b[48] = verdict
 	b[49] = 2 // AF_INET
 	b[50] = flags

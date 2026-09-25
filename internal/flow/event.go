@@ -1,5 +1,31 @@
-// Package flow, cekirdekten gelen ham olaylari cozumler ve dogrulama kapisini
-// sinirlayan "gozlenen akis" kumesini olusturur.
+// Package flow — cekirdekten gelen ham baytlari anlamli olaylara cevirir ve
+// gozlenen akis kumesini olusturur.
+//
+// Paket iki dosyadan olusuyor:
+//
+//	event.go     tek bir connect() denemesi: cozumleme + siniflandirma
+//	observed.go  olaylarin akis bazinda toplanmasi
+//
+// NE ISE YARIYOR (event.go)
+//
+// Bu dosya projenin KARAR noktasi. Cekirdek yalnizca ham olguyu bildirir --
+// "el sikisma tamamlandi" ya da "tamamlanmadi". Bir denemenin SESSIZCE mi
+// dusuruldugu yoksa RST ile mi reddedildigi burada belirlenir.
+//
+// Ayrim neden onemli: kubectl describe her iki durumu da ayni gosterir,
+// ama kok nedenleri tamamen farklidir.
+//
+//	dropped  -> NetworkPolicy, guvenlik duvari, ag bolunmesi, dugum olumu
+//	refused  -> hedefe ULASILDI ama o portta dinleyen surec yok
+//
+// # NEDEN SINIFLANDIRMA CEKIRDEKTE DEGIL BURADA
+//
+// Siniflandirma politikasi hizli degisir: esik degeri ayarlanir, yeni bir
+// sinif eklenir, kural rafine edilir. Bu karar bpf/flowmon.bpf.c icinde
+// olsaydi her degisiklik icin eBPF'i yeniden derleyip verifier'dan gecirip
+// cekirdege yeniden yuklemek gerekirdi. Burada bir `go build` yetiyor.
+//
+// Cekirdek olcer, userspace yorumlar.
 package flow
 
 import (
@@ -9,7 +35,12 @@ import (
 	"time"
 )
 
-// EventSize, bpf/flowmon.h icindeki FLOW_EVENT_SIZE ile ayni olmali.
+// EventSize, bpf/flowmon.h icindeki FLOW_EVENT_SIZE ile AYNI olmali.
+//
+// Cekirdek ile userspace arasinda serilestirme yok: cekirdek struct'i ham
+// olarak ring buffer'a yaziyor, Parse() asagida elle offsetlerden okuyor.
+// Hizli ama kirilgan -- iki taraf kayarsa hata VERMEZ, sessizce yanlis veri
+// uretir. Bu sabit ve event_test.go o kaymayi yakalamak icin var.
 const EventSize = 72
 
 // Cekirdekteki enum fm_verdict ile ayni.
@@ -30,14 +61,20 @@ type Class string
 
 const (
 	ClassOK      Class = "established"
-	ClassDropped Class = "dropped"  /* SYN yeniden iletildi, cevap yok */
-	ClassRefused Class = "refused"  /* RST — hedefe ulasildi, port kapali */
+	ClassDropped Class = "dropped" /* SYN yeniden iletildi, cevap yok */
+	ClassRefused Class = "refused" /* RST — hedefe ulasildi, port kapali */
 )
 
-// İlk SYN yeniden iletimi ~1sn sonra gelir. Uygulama bundan once vazgecerse
-// (non-blocking connect + kisa timeout) retransmit gormeyiz; bu durumda sureye
-// bakarak yine de "dusuruldu" diyoruz. Anlik RST milisaniyeler icinde doner,
-// yani iki durum sure ekseninde net ayrilir.
+// dropInferenceThreshold — yeniden iletim gorulmediginde sureye bakan yedek
+// olcut.
+//
+// Ilk SYN yeniden iletimi ~1 sn sonra gelir. Uygulama bundan once vazgecerse
+// (non-blocking connect + kisa timeout) hic retransmit gormeyiz ve olay
+// yanlislikla "refused" sayilirdi. Bu esik o bosluğu kapatiyor.
+//
+// 900 ms neden guvenli: anlik RST milisaniyeler icinde doner (olculen:
+// ~0.03 ms), sessiz dusurme saniyeler surer (olculen: ~3000 ms). Iki durum
+// arasinda dort buyukluk mertebesi var, esigin tam yeri kritik degil.
 const dropInferenceThreshold = 900 * time.Millisecond
 
 // Event, tek bir connect() denemesinin sonucu.
@@ -69,7 +106,17 @@ func (e Event) Class() Class {
 // Failed, denemenin el sikismayi tamamlayamadigini soyler.
 func (e Event) Failed() bool { return e.verdict == verdictFailed }
 
-// Parse, ring buffer'dan gelen ham kaydi cozumler.
+// Parse — ring buffer'dan gelen 72 baytlik ham kaydi Event'e cevirir.
+//
+// Offsetler bpf/flowmon.h icindeki struct flow_event ile birebir eslesmek
+// zorunda. Sihirli sayilar orada gerekce ile birlikte yaziyor; degistirmeden
+// once iki tarafi da okuyun.
+//
+// Bayt sirasi iki farkli kuralda: cekirdek struct alanlarini host sirasinda
+// yaziyor (bu yuzden NativeEndian), ama IP adresleri soket icinde zaten
+// network byte order'da duruyor ve netip.AddrFrom4 de onu bekliyor -- bu
+// yuzden adreslere cevrim UYGULANMIYOR. Portlar cekirdek tarafinda zaten
+// host sirasina cevrilmis durumda.
 func Parse(raw []byte) (Event, error) {
 	if len(raw) < EventSize {
 		return Event{}, fmt.Errorf("kisa kayit: %d bayt, beklenen %d", len(raw), EventSize)
