@@ -5,7 +5,20 @@
 # Bu script ikisini yan yana koyar.
 #
 #   ./scripts/analyze.sh            tum senaryolar icin matris
-#   ./scripts/analyze.sh diff       baseline'a gore anlamsal fark
+#   ./scripts/analyze.sh diff       baseline'a gore anlamsal fark (metin)
+#   ./scripts/analyze.sh json       makine okunur cikti + hesaplanan fark
+#
+# NEDEN AYRI BIR json MODU VAR
+#
+# Dogrulama kapisi bu ciktiyi PROGRAMLA okuyacak, gozle degil. Ama araclarin
+# cikti bicimleri simetrik degil:
+#
+#   netpolicy list   txt, JSON, dot, csv, md, svg
+#   netpolicy diff   txt,       dot, csv, md, svg      <-- JSON YOK
+#
+# Yani kapi "diff" komutunun ciktisini ayristiramaz. Bunun yerine her iki
+# dizin icin `list -o json` alip farki KENDISI hesaplamali. Asagidaki json
+# modu tam olarak bunu yapiyor ve kapinin prototipi sayilir.
 #
 # Gereksinim:  go install github.com/np-guard/netpol-analyzer/cmd/netpolicy@v1.4.4
 set -uo pipefail
@@ -57,6 +70,35 @@ for row in "${SCENARIOS[@]}"; do
 	IFS='|' read -r name file pol <<<"$row"
 	compose "$WORK/$name" "$pol" "$file"
 done
+
+if [[ ${1:-} == json ]]; then
+	for row in "${SCENARIOS[@]}"; do
+		IFS='|' read -r name _ pol <<<"$row"
+		echo "=== baseline -> $name   (bozulan: $pol) ==="
+		python3 - "$NP" "$WORK/baseline" "$WORK/$name" <<'PY'
+import json, subprocess, sys
+np, d1, d2 = sys.argv[1:4]
+
+def conns(d):
+    """Bir dizindeki izin verilen baglantilari (kaynak,hedef) -> port seti
+    olarak dondurur. Kume disi hedefler (0.0.0.0/0) atlaniyor: politika
+    analizinde gurultu, gozlenen akis kumesinde karsiligi yok."""
+    out = subprocess.run([np, "list", "--dirpath", d, "-o", "json"],
+                         capture_output=True, text=True).stdout
+    return {(e["src"], e["dst"]): e["conn"]
+            for e in json.loads(out) if "0.0.0.0" not in e["dst"]}
+
+a, b = conns(d1), conns(d2)
+for k in sorted(set(a) | set(b)):
+    if a.get(k) != b.get(k):
+        print(f'  {k[0]} -> {k[1]}')
+        print(f'      baseline: {a.get(k, "(yok)")}')
+        print(f'      sonra   : {b.get(k, "(yok)")}')
+PY
+		echo
+	done
+	exit 0
+fi
 
 if [[ ${1:-} == diff ]]; then
 	for row in "${SCENARIOS[@]}"; do
