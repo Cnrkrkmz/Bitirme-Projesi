@@ -103,6 +103,22 @@ calismali** — `make build` bu sirayi zaten kuruyor.
   tutuluyor ve cikista uyari olarak basiliyor. Sifirdan buyukse o kosudan
   hesaplanan metrikler eksik veriye dayaniyor demektir.
 
+## Demo
+
+Uc script, uc ariza. Her biri tek terminalde ayni hikayeyi canli gosterir:
+saglikli trafik akar, bir politika bozulur, eBPF kesintiyi saniyesi saniyesine
+gorur, Kubernetes ise hicbir sey soylemez, politika geri yuklenir.
+
+```bash
+./demo/1-etiket-hatasi.sh     # app: api -> api-v2          api -> store:19090 kesilir
+./demo/2-port-hatasi.sh       # port 18081 -> 18082         frontend -> api:18081 kesilir
+./demo/3-ve-veya-hatasi.sh    # iki secici ayni ogede (VE)  frontend -> api:18080 kesilir
+```
+
+Her biri ~50 sn surer. Ctrl-C ile yarida kesilse bile politika geri yuklenir
+ve eBPF programi cekirdekten sokulur. Baslamadan once kume ici ag/DNS'i
+dogrular: DNS calismiyorsa uygulama connect() cagiramaz ve ekran bos kalirdi.
+
 ## Gozlem ortami
 
 `manifests/` altinda kalici bir ortam var: `agentic-sre` namespace'inde iki pod
