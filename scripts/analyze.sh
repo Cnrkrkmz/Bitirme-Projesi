@@ -7,6 +7,9 @@
 #   ./scripts/analyze.sh            tum senaryolar icin matris
 #   ./scripts/analyze.sh diff       baseline'a gore anlamsal fark (metin)
 #   ./scripts/analyze.sh json       makine okunur cikti + hesaplanan fark
+#   ./scripts/analyze.sh compare    np-guard'in HESAPLADIGI ile eBPF'in OLCTUGUNU
+#                                   hucre hucre karsilastirir (out/ olcumleri gerekir:
+#                                   once 'make bootstrap && make all-scenarios')
 #
 # NEDEN AYRI BIR json MODU VAR
 #
@@ -70,6 +73,58 @@ for row in "${SCENARIOS[@]}"; do
 	IFS='|' read -r name file pol <<<"$row"
 	compose "$WORK/$name" "$pol" "$file"
 done
+
+if [[ ${1:-} == compare ]]; then
+	# Iki bagimsiz yontem ayni soruyu cevapliyor: "bu baglanti bu durumda acik mi?"
+	#   np-guard  YAML okuyarak HESAPLAR (trafik yok)
+	#   eBPF      kumede gercekten kurup OLCER (out/observed-<durum>.json)
+	# Ayni cevabi veriyorlarsa analizorun modeli ile kumenin gercek davranisi
+	# ortusuyor demektir -- Proje Ozeti §3.4'un "en tehlikeli hata modu" dedigi
+	# ayrisma yok.
+	OUT="$ROOT/out"
+	printf "%-25s" "BAGLANTI"
+	for d in baseline selector port and-or; do printf " %-16s" "$d"; done
+	echo; printf '%.0s-' {1..92}; echo
+	total=0 match=0
+	for f in "${FLOWS[@]}"; do
+		set -- $f
+		printf "%-8s -> %-5s:%-6s" "$1" "$2" "$3"
+		for d in baseline selector port and-or; do
+			np=$("$NP" evaluate --dirpath "$WORK/$d" \
+				-n "$NS" -s "$1" --destination-namespace "$NS" -d "$2" -p "$3" 2>&1 | tail -1)
+			[[ $np == *": true" ]] && np=acik || np=KAPALI
+			# Olcum dosyasinda akisi PORTA gore buluyoruz: pod IP'leri her yeniden
+			# baslatmada degisiyor, ama bu ortamda her port tek bir akisa ait.
+			ebpf=$(python3 - "$OUT/observed-$d.json" "$3" <<'PY'
+import json, sys
+try:
+    flows = json.load(open(sys.argv[1]))["flows"]
+except FileNotFoundError:
+    print("yok"); sys.exit()
+f = [x for x in flows if x["dport"] == int(sys.argv[2])]
+if not f:
+    print("yok")
+else:
+    print("KAPALI" if f[0]["dropped"] > 0 else "acik")
+PY
+)
+			total=$((total + 1))
+			if [[ $ebpf == "$np" ]]; then
+				match=$((match + 1)); mark="="
+			else
+				mark="X"
+			fi
+			printf " %-16s" "$np $mark $ebpf"
+		done
+		echo
+	done
+	echo
+	echo "  her hucre:  np-guard (hesaplanan)  =/X  eBPF (olculen)"
+	echo
+	echo "  ORTUSEN: $match / $total"
+	[[ $match -eq $total ]] || echo "  'yok' gorunuyorsa olcum eksik: make bootstrap && make all-scenarios"
+	exit 0
+fi
 
 if [[ ${1:-} == json ]]; then
 	for row in "${SCENARIOS[@]}"; do

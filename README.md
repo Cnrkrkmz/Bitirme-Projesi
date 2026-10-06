@@ -162,6 +162,12 @@ Olculen sonuc:
 Ayni sirada `kubectl get pods` iki pod'u da `1/1 Running`, restart yok
 gosteriyor ve `kubectl get events` bos. Kapatilmaya calisilan boslugu bu.
 
+Olculen ile hesaplananin karsilastirmasi tek komut:
+
+```bash
+./scripts/analyze.sh compare      # 3 baglanti x 4 durum = 12 hucre, ORTUSEN: 12 / 12
+```
+
 Bu iki dosya -- `out/observed-baseline.json` ve `out/observed-faulted.json` --
 dogrulama kapisinin (§3.3) girdi cifti olacak: baseline kumesi kapinin
 korumasi gerekeni, faulted kumesi onarmasi gerekeni tanimliyor.
