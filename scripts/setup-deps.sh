@@ -50,8 +50,9 @@ if ! "$GO_BIN" version >/dev/null 2>&1 || \
 fi
 
 # netpol-analyzer (np-guard): statik politika analizi. Hazir ikili
-# yayinlanmiyor, kaynaktan derlemek gerekiyor.
-NP=$(go env GOPATH 2>/dev/null || echo "$HOME/go")/bin/netpolicy
+# yayinlanmiyor, kaynaktan derlemek gerekiyor. Derlenen ikili /usr/local/bin'e
+# kuruluyor: PATH'te her zaman var, yeniden baslatmada export gerekmiyor.
+NP=/usr/local/bin/netpolicy
 if [[ ! -x $NP ]]; then
 	echo "==> netpol-analyzer"
 	# Linker bellek yiyor: 4 GB'in altindaki makinelerde OOM ile olebiliyor.
@@ -61,8 +62,11 @@ if [[ ! -x $NP ]]; then
 		echo "   (bellek dusuk: ${avail}MB -- onbellek birakiliyor)"
 		$SUDO sync && $SUDO sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
 	fi
-	GOGC=20 go install github.com/np-guard/netpol-analyzer/cmd/netpolicy@v1.4.4 || \
+	if GOGC=20 go install github.com/np-guard/netpol-analyzer/cmd/netpolicy@v1.4.4; then
+		$SUDO install -m 0755 "$(go env GOPATH)/bin/netpolicy" "$NP"
+	else
 		echo "UYARI: netpolicy derlenemedi; scripts/analyze.sh calismaz."
+	fi
 fi
 
 echo "==> dogrulama"

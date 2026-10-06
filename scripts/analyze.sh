@@ -20,7 +20,7 @@
 # dizin icin `list -o json` alip farki KENDISI hesaplamali. Asagidaki json
 # modu tam olarak bunu yapiyor ve kapinin prototipi sayilir.
 #
-# Gereksinim:  go install github.com/np-guard/netpol-analyzer/cmd/netpolicy@v1.4.4
+# Gereksinim:  netpolicy PATH'te (scripts/setup-deps.sh /usr/local/bin'e kurar)
 set -uo pipefail
 
 NS=agentic-sre
