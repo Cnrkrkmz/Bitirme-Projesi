@@ -126,6 +126,18 @@ sebep, yeniden iletim, durum degisikligi), olduklari anda:
 Bu, bpftrace ile yazilmis ayri bir eBPF programi; flowmon'dan bagimsiz,
 ayni cekirdek noktalarina takiliyor.
 
+flowmon'un KENDI eBPF programinin cekirdekten gonderdigi veriyi, Go tarafi
+hicbir yorum yapmadan gormek icin:
+
+```bash
+sudo ./bin/flowmon -dport 19090 -raw
+```
+
+Her olay 72 baytlik ham kayit olarak (hex) ve flowmon.h'deki alan
+sinirlarina gore bolunmus sayilar olarak basilir: `verdict=0/1`, `retrans`,
+`duration_ns`. "dropped" karari burada yok -- o karar bu sayilardan
+internal/flow/event.go'da turetiliyor.
+
 Her biri ~50 sn surer. Ctrl-C ile yarida kesilse bile politika geri yuklenir
 ve eBPF programi cekirdekten sokulur. Baslamadan once kume ici ag/DNS'i
 dogrular: DNS calismiyorsa uygulama connect() cagiramaz ve ekran bos kalirdi.

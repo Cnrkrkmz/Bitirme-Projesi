@@ -35,6 +35,7 @@
 // KULLANIM
 //
 //	sudo ./bin/flowmon -dport 18080,19090 -observed observed.json
+//	sudo ./bin/flowmon -dport 19090 -raw     # cekirdekten gelen ham baytlar
 //
 // Root gerekiyor (BPF program yukleme) ve cekirdekte BTF olmali.
 // Ctrl-C ile duzgun kapanir ve gozlenen kumeyi yazar.
@@ -48,6 +49,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -75,6 +77,7 @@ func main() {
 		observedPath = flag.String("observed", "", "cikista gozlenen akis kumesini bu dosyaya yaz")
 		cgroupRoot   = flag.String("cgroup-root", cgroups.DefaultRoot, "cgroup v2 kok dizini")
 		quiet        = flag.Bool("quiet", false, "olay akisini bastir, yalnizca ozet yaz")
+		raw          = flag.Bool("raw", false, "cekirdekten gelen 72 baytlik ham kaydi yorumlamadan bas")
 	)
 	flag.Parse()
 
@@ -91,6 +94,7 @@ func main() {
 		observedPath: *observedPath,
 		cgroupRoot:   *cgroupRoot,
 		quiet:        *quiet,
+		raw:          *raw,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "flowmon: %v\n", err)
 		os.Exit(1)
@@ -128,6 +132,7 @@ type runOpts struct {
 	observedPath string
 	cgroupRoot   string
 	quiet        bool
+	raw          bool
 }
 
 // jsonEvent — stdout'a yazilan JSONL satirinin bicimi.
@@ -210,6 +215,12 @@ func run(o runOpts) error {
 		wall := bootTime.Add(ev.Timestamp)
 		observed.Add(ev, wall)
 
+		if o.raw {
+			written++
+			printRaw(written, rec.RawSample)
+			continue
+		}
+
 		if o.quiet || (o.failedOnly && !ev.Failed()) {
 			continue
 		}
@@ -266,6 +277,28 @@ func finish(p *probe.Probe, observed *flow.ObservedSet, path string, seen, writt
 	}
 	fmt.Fprintf(os.Stderr, "flowmon: gozlenen akis kumesi -> %s\n", path)
 	return nil
+}
+
+// printRaw — eBPF programinin ring buffer'a yazdigi kaydi HIC YORUMLAMADAN basar.
+//
+// Ekranda gorunen sey, bpf/flowmon.bpf.c icindeki fm_inet_sock_set_state'in
+// cekirdekte doldurdugu struct flow_event'in baytlari -- Go tarafi bunlara
+// henuz dokunmadi. Altindaki satir yalnizca bu baytlari flowmon.h'deki alan
+// sinirlarina gore boluyor: sayilar oldugu gibi (verdict 0/1, sure nanosaniye,
+// adresler ag bayt sirasinda). "dropped/refused" karari burada YOK; o karar
+// internal/flow/event.go'da bu ham degerlerden turetiliyor.
+func printRaw(n uint64, b []byte) {
+	e := binary.NativeEndian
+	fmt.Printf("olay #%d  (%d bayt)\n", n, len(b))
+	for i := 0; i < len(b); i += 16 {
+		end := min(i+16, len(b))
+		fmt.Printf("  %04x  % x\n", i, b[i:end])
+	}
+	fmt.Printf("  ts_ns=%d cgroup_id=%d duration_ns=%d pid=%d tgid=%d\n",
+		e.Uint64(b[0:8]), e.Uint64(b[8:16]), e.Uint64(b[16:24]), e.Uint32(b[24:28]), e.Uint32(b[28:32]))
+	fmt.Printf("  saddr=[% x] daddr=[% x] retrans=%d sport=%d dport=%d verdict=%d family=%d flags=%d comm=%q\n\n",
+		b[32:36], b[36:40], e.Uint32(b[40:44]), e.Uint16(b[44:46]), e.Uint16(b[46:48]),
+		b[48], b[49], b[50], strings.TrimRight(string(b[52:68]), "\x00"))
 }
 
 // bootWallClock — cekirdek monotonik saatinin sifir noktasina karsilik gelen
