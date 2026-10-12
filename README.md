@@ -115,6 +115,17 @@ gorur, Kubernetes ise hicbir sey soylemez, politika geri yuklenir.
 ./demo/3-ve-veya-hatasi.sh    # iki secici ayni ogede (VE)  frontend -> api:18080 kesilir
 ```
 
+Ikinci bir terminalde cekirdegin HAM olay akisi izlenebilir -- yorumlanmis
+"DROPPED" kararina giden olaylar (connect, SYN dususu ve cekirdegin verdigi
+sebep, yeniden iletim, durum degisikligi), olduklari anda:
+
+```bash
+./demo/ebpf-stream.sh 19090   # demo 1 icin; demo 2 -> 18081, demo 3 -> 18080
+```
+
+Bu, bpftrace ile yazilmis ayri bir eBPF programi; flowmon'dan bagimsiz,
+ayni cekirdek noktalarina takiliyor.
+
 Her biri ~50 sn surer. Ctrl-C ile yarida kesilse bile politika geri yuklenir
 ve eBPF programi cekirdekten sokulur. Baslamadan once kume ici ag/DNS'i
 dogrular: DNS calismiyorsa uygulama connect() cagiramaz ve ekran bos kalirdi.
