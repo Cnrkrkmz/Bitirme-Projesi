@@ -4,7 +4,7 @@
 #   ./scripts/env.sh up                    is yuklerini kur -- POLITIKASIZ
 #   ./scripts/env.sh baseline              bilinen-iyi politika kumesini uygula
 #   ./scripts/env.sh capture 30 baseline   30 sn yakala -> out/*-baseline.*
-#   ./scripts/env.sh break <senaryo>       ariza uygula: selector|port|and-or
+#   ./scripts/env.sh break <senaryo>       ariza uygula: selector|port|and-or|protocol|target
 #   ./scripts/env.sh restore               bilinen-iyi politikaya don
 #   ./scripts/env.sh status                pod, politika ve mevcut durum
 #   ./scripts/env.sh down                  ortami sil
@@ -34,6 +34,8 @@ declare -A SCENARIO=(
 	[selector]="31-break-selector.yaml|api -> store:19090|allow-store-data"
 	[port]="32-break-port.yaml|frontend -> api:18081|allow-api-admin"
 	[and-or]="33-break-and-or.yaml|frontend -> api:18080|allow-api-app"
+	[protocol]="34-break-protocol.yaml|frontend -> api:18081|allow-api-admin"
+	[target]="35-break-target.yaml|frontend -> api:18081|allow-api-admin"
 )
 # Is yuklerinin sabitlenecegi dugum. flowmon dugum basina calistigi icin
 # pod'lar bu scriptin kostugu makineye gelmeli; baska bir dugum isterseniz
@@ -98,6 +100,8 @@ cmd_status() {
 	[[ $(pol_json allow-store-data) == *'"app":"api-v2"'*      ]] && active=selector
 	[[ $(pol_json allow-api-admin)  == *'"port":18082'*        ]] && active=port
 	[[ $(pol_json allow-api-app)    == *'"namespaceSelector"'* ]] && active=and-or
+	[[ $(pol_json allow-api-admin)  == *'"protocol":"UDP"'*    ]] && active=protocol
+	[[ $(pol_json allow-api-admin)  == *'"app":"store"'*       ]] && active=target
 	if [[ -n $active ]]; then
 		IFS='|' read -r _ flow pol <<<"${SCENARIO[$active]}"
 		echo "  durum: ARIZALI  senaryo=$active"

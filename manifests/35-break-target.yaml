@@ -1,0 +1,26 @@
+# SENARYO 5 -- yanlis hedef pod
+#
+#   spec.podSelector: app: api  ->  app: store
+#
+# Kaynak dogru, port dogru, protokol dogru; ama kural YANLIS POD'A uygulanmis.
+# api'ye 18081 izni ortadan kalkiyor, onun yerine store'a anlamsiz bir izin
+# geliyor (store 18081'de dinlemiyor). Etiket hatasindan (senaryo 1) farki:
+# orada "kim girebilir" (from) bozuktu, burada "hangi pod korunuyor" bozuk.
+#
+#   KESILIR :  frontend -> api:18081
+#   AYAKTA  :  frontend -> api:18080,  api -> store:19090
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-admin
+  namespace: agentic-sre
+spec:
+  podSelector:
+    matchLabels: { app: store }   # <-- app: api olmaliydi
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: frontend }
+      ports:
+        - { protocol: TCP, port: 18081 }
