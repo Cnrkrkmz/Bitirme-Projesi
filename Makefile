@@ -103,10 +103,10 @@ bootstrap: $(BIN)
 	./scripts/env.sh baseline
 	./scripts/env.sh capture 30 baseline
 
-# Uc senaryonun tamamini sirayla olcer. bootstrap'tan sonra calistirilir.
+# Tum senaryolari sirayla olcer. bootstrap'tan sonra calistirilir.
 .PHONY: all-scenarios
 all-scenarios: $(BIN)
-	for s in selector port and-or; do \
+	for s in selector port and-or protocol target; do \
 		./scripts/env.sh break $$s; \
 		./scripts/env.sh capture 45 $$s; \
 		./scripts/env.sh restore; \

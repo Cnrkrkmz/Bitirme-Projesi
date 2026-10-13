@@ -40,7 +40,12 @@ SCENARIOS=(
 	"selector|31-break-selector.yaml|allow-store-data"
 	"port|32-break-port.yaml|allow-api-admin"
 	"and-or|33-break-and-or.yaml|allow-api-app"
+	"protocol|34-break-protocol.yaml|allow-api-admin"
+	"target|35-break-target.yaml|allow-api-admin"
 )
+# Tablo sutunlari: once saglam durum, sonra SCENARIOS sirasiyla her senaryo.
+STATES=(baseline)
+for row in "${SCENARIOS[@]}"; do STATES+=("${row%%|*}"); done
 
 trap 'rm -rf "$WORK"' EXIT
 [[ -x $NP ]] || { echo "HATA: netpolicy bulunamadi ($NP)"; exit 1; }
@@ -83,13 +88,13 @@ if [[ ${1:-} == compare ]]; then
 	# ayrisma yok.
 	OUT="$ROOT/out"
 	printf "%-25s" "BAGLANTI"
-	for d in baseline selector port and-or; do printf " %-16s" "$d"; done
+	for d in "${STATES[@]}"; do printf " %-16s" "$d"; done
 	echo; printf '%.0s-' {1..92}; echo
 	total=0 match=0
 	for f in "${FLOWS[@]}"; do
 		set -- $f
 		printf "%-8s -> %-5s:%-6s" "$1" "$2" "$3"
-		for d in baseline selector port and-or; do
+		for d in "${STATES[@]}"; do
 			np=$("$NP" evaluate --dirpath "$WORK/$d" \
 				-n "$NS" -s "$1" --destination-namespace "$NS" -d "$2" -p "$3" 2>&1 | tail -1)
 			[[ $np == *": true" ]] && np=acik || np=KAPALI
@@ -171,7 +176,7 @@ printf '%.0s-' {1..68}; echo
 for f in "${FLOWS[@]}"; do
 	set -- $f
 	row=$(printf "%-8s -> %-5s:%-6s" "$1" "$2" "$3")
-	for d in baseline selector port and-or; do
+	for d in "${STATES[@]}"; do
 		out=$("$NP" evaluate --dirpath "$WORK/$d" \
 			-n "$NS" -s "$1" --destination-namespace "$NS" -d "$2" -p "$3" 2>&1 | tail -1)
 		[[ $out == *": true" ]] && v="izinli" || v="ENGELLI"

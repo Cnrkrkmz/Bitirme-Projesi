@@ -1,0 +1,26 @@
+# SENARYO 4 -- protokol hatasi
+#
+#   protocol: TCP  ->  protocol: UDP
+#
+# Port dogru, secici dogru, hedef pod dogru; YALNIZCA protokol yanlis.
+# Uygulama (wget/HTTP) TCP kullaniyor, kural ise yalnizca UDP'ye izin veriyor.
+# Port hatasindan daha zor: politikadaki port ile Service'teki port ayni
+# oldugu icin "sayi uyusmazligi" ipucu yok.
+#
+#   KESILIR :  frontend -> api:18081
+#   AYAKTA  :  frontend -> api:18080,  api -> store:19090
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-admin
+  namespace: agentic-sre
+spec:
+  podSelector:
+    matchLabels: { app: api }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: frontend }
+      ports:
+        - { protocol: UDP, port: 18081 }   # <-- TCP olmaliydi
